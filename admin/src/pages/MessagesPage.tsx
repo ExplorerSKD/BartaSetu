@@ -6,7 +6,7 @@ const MessagesPage = () => {
   const [messages, setMessages] = useState<MessageItem[]>([]);
 
   useEffect(() => {
-    getMessages().then(setMessages);
+    getMessages().then(setMessages).catch((err) => console.error("Failed to load messages", err));
   }, []);
 
   const getStatusColor = (status: string) => {

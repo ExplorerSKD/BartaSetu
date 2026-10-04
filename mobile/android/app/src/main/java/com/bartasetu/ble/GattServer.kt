@@ -35,9 +35,7 @@ class GattServer(
             if (characteristic?.uuid == BleConstants.CHAR_MESSAGE_WRITE && value != null && device != null) {
                 val completePayload = BleDataProtocol.reassembleChunk(value, device.address)
                 if (completePayload != null) {
-                    val messageString = String(completePayload, Charsets.UTF_8)
-                    Log.i(tag, "Complete message received from ${device.address}: ${messageString.take(40)}...")
-                    onMessageReceived(messageString, device.address)
+                    onMessageReceived(String(completePayload, Charsets.UTF_8), device.address)
                 }
             }
         }
@@ -51,7 +49,6 @@ class GattServer(
         ) {
             val responseData = when (characteristic?.uuid) {
                 BleConstants.CHAR_HANDSHAKE -> "BARTA_V1_OK".toByteArray()
-                BleConstants.CHAR_DEVICE_INFO -> "ANDROID_NODE".toByteArray()
                 else -> ByteArray(0)
             }
             gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, responseData)
@@ -72,32 +69,22 @@ class GattServer(
                 BluetoothGattService.SERVICE_TYPE_PRIMARY
             )
 
-            // Write Characteristic (Receive chunks)
-            val charWrite = BluetoothGattCharacteristic(
+            // Write characteristic: peers push message chunks here
+            service.addCharacteristic(BluetoothGattCharacteristic(
                 BleConstants.CHAR_MESSAGE_WRITE,
                 BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
                 BluetoothGattCharacteristic.PERMISSION_WRITE
-            )
-            service.addCharacteristic(charWrite)
+            ))
 
-            // Message IDs Characteristic (Deduplication exchange)
-            val charIds = BluetoothGattCharacteristic(
-                BleConstants.CHAR_MESSAGE_IDS,
-                BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
-                BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE
-            )
-            service.addCharacteristic(charIds)
-
-            // Handshake Characteristic
-            val charHandshake = BluetoothGattCharacteristic(
+            // Handshake characteristic: lets a peer confirm it is talking to BartaSetu
+            service.addCharacteristic(BluetoothGattCharacteristic(
                 BleConstants.CHAR_HANDSHAKE,
                 BluetoothGattCharacteristic.PROPERTY_READ,
                 BluetoothGattCharacteristic.PERMISSION_READ
-            )
-            service.addCharacteristic(charHandshake)
+            ))
 
             gattServer?.addService(service)
-            Log.i(tag, "GattServer successfully initialized with BartaSetu services")
+            Log.i(tag, "GattServer initialized with BartaSetu service")
             return true
         } catch (e: Exception) {
             Log.e(tag, "Exception starting GattServer: ${e.message}")

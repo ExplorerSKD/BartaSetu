@@ -1,166 +1,76 @@
-/**
- * useMeshStore.ts
- * Zustand state store for BLE Mesh Network and Peer Discovery in BartaSetu mobile.
- * Manages internet connectivity status, BLE mesh active state,
- * nearby peer devices, routing scores, and mesh relay statistics.
- */
-
 import { create } from 'zustand';
-import { messageService } from '../services/MessageService';
-import { RelayScorer } from '../services/RelayScorer';
-import { dbService } from '../database/DatabaseService';
-import { MeshDevice, MeshStats } from '../types';
+import { NearbySosAlert, Peer } from '../types';
 
-interface MeshState {
-  isOnline: boolean;
-  isMeshActive: boolean;
-  nearbyDevices: MeshDevice[];
-  relayedCount: number;
-  stats: MeshStats;
+export type SosDeliveryState = 'sending' | 'server' | 'mesh' | 'waiting' | 'failed';
 
-  // Actions
-  setIsOnline: (online: boolean) => void;
-  toggleMesh: (active?: boolean) => void;
-  addDiscoveredDevice: (device: Omit<MeshDevice, 'relayScore'> & { relayScore?: number }) => void;
-  removeDevice: (deviceId: string) => void;
-  updateDevice: (deviceId: string, partial: Partial<MeshDevice>) => void;
-  incrementRelayedCount: () => void;
-  clearNearbyDevices: () => void;
-  loadSavedDevices: () => Promise<void>;
+export interface OwnSos {
+  id: string;
+  category: string;
+  createdAt: number;
+  state: SosDeliveryState;
+  sharedWith: number;
+  hasLocation: boolean;
 }
 
-export const useMeshStore = create<MeshState>((set, get) => ({
-  isOnline: false,
-  isMeshActive: true,
-  nearbyDevices: [],
-  relayedCount: 0,
-  stats: {
-    messagesRelayed: 0,
-    hopsSaved: 0,
-    activePeersCount: 0,
-    lastRelayTimestamp: null
-  },
+interface MeshState {
+  /** Backend reachable over the internet. */
+  online: boolean;
+  /** WebSocket to the backend is open. */
+  serverConnected: boolean;
+  /** Native mesh module present in this build. */
+  meshSupported: boolean;
+  permissionsGranted: boolean;
+  nearbyActive: boolean;
+  bleActive: boolean;
+  bluetoothOn: boolean;
+  /** Android allows BartaSetu to keep running in the background (battery optimisation off). */
+  backgroundAllowed: boolean;
+  peers: Record<string, Peer>;
+  /** Our own messages waiting for a route. */
+  ownQueued: number;
+  /** Packets we are carrying for other people. */
+  carrying: number;
+  relayedForOthers: number;
+  nearbyAlerts: NearbySosAlert[];
+  /** SOS from a nearby person waiting to be shown full screen. */
+  incomingSos: NearbySosAlert | null;
+  lastSos: OwnSos | null;
+  /** Recent mesh activity, newest first, shown on the Nearby screen. */
+  activity: Array<{ at: number; text: string }>;
+  set: (partial: Partial<MeshState>) => void;
+  reset: () => void;
+}
 
-  setIsOnline: (online: boolean) => {
-    set({ isOnline: online });
-    // Notify MessageService to trigger auto-sync if transitioning offline -> online
-    messageService.setOnlineStatus(online);
-  },
+const initial = {
+  online: false,
+  serverConnected: false,
+  meshSupported: false,
+  permissionsGranted: false,
+  nearbyActive: false,
+  bleActive: false,
+  bluetoothOn: true,
+  backgroundAllowed: true,
+  peers: {} as Record<string, Peer>,
+  ownQueued: 0,
+  carrying: 0,
+  relayedForOthers: 0,
+  nearbyAlerts: [] as NearbySosAlert[],
+  incomingSos: null as NearbySosAlert | null,
+  lastSos: null as OwnSos | null,
+  activity: [] as Array<{ at: number; text: string }>,
+};
 
-  toggleMesh: (active?: boolean) => {
-    const nextActive = active !== undefined ? active : !get().isMeshActive;
-    set({ isMeshActive: nextActive });
-  },
-
-  addDiscoveredDevice: (deviceData) => {
-    const current = get().nearbyDevices;
-
-    // Calculate intelligent relay score if not pre-computed
-    const relayScore =
-      deviceData.relayScore !== undefined
-        ? deviceData.relayScore
-        : RelayScorer.calculateRelayScore({
-            deviceId: deviceData.id,
-            hasInternet: deviceData.hasInternet,
-            rssi: deviceData.rssi,
-            distanceMeters: deviceData.distanceMeters || 10,
-            batteryLevel: deviceData.batteryLevel,
-            previousSuccessRate: 0.9,
-            destinationProximityMeters: deviceData.distanceMeters
-          });
-
-    const fullDevice: MeshDevice = {
-      ...deviceData,
-      relayScore: Math.round(relayScore),
-      lastSeen: Date.now()
-    };
-
-    const existsIndex = current.findIndex((d) => d.id === fullDevice.id);
-    let nextDevices: MeshDevice[];
-
-    if (existsIndex >= 0) {
-      nextDevices = [...current];
-      nextDevices[existsIndex] = fullDevice;
-    } else {
-      nextDevices = [...current, fullDevice];
-    }
-
-    // Rank devices by relay score
-    nextDevices.sort((a, b) => b.relayScore - a.relayScore);
-
-    set((state) => ({
-      nearbyDevices: nextDevices,
-      stats: {
-        ...state.stats,
-        activePeersCount: nextDevices.length
-      }
-    }));
-
-    // Persist to local database
-    dbService.saveMeshDevice(fullDevice).catch((err) => {
-      console.warn('Failed to save mesh device to SQLite:', err);
-    });
-  },
-
-  removeDevice: (deviceId: string) => {
-    set((state) => {
-      const nextDevices = state.nearbyDevices.filter((d) => d.id !== deviceId);
-      return {
-        nearbyDevices: nextDevices,
-        stats: {
-          ...state.stats,
-          activePeersCount: nextDevices.length
-        }
-      };
-    });
-  },
-
-  updateDevice: (deviceId: string, partial: Partial<MeshDevice>) => {
-    set((state) => {
-      const nextDevices = state.nearbyDevices.map((d) =>
-        d.id === deviceId ? { ...d, ...partial, lastSeen: Date.now() } : d
-      );
-      nextDevices.sort((a, b) => b.relayScore - a.relayScore);
-      return { nearbyDevices: nextDevices };
-    });
-  },
-
-  incrementRelayedCount: () => {
-    set((state) => ({
-      relayedCount: state.relayedCount + 1,
-      stats: {
-        ...state.stats,
-        messagesRelayed: state.stats.messagesRelayed + 1,
-        hopsSaved: state.stats.hopsSaved + 1,
-        lastRelayTimestamp: Date.now()
-      }
-    }));
-  },
-
-  clearNearbyDevices: () => {
-    set((state) => ({
-      nearbyDevices: [],
-      stats: {
-        ...state.stats,
-        activePeersCount: 0
-      }
-    }));
-  },
-
-  loadSavedDevices: async () => {
-    try {
-      const saved = await dbService.getMeshDevices();
-      if (saved && saved.length > 0) {
-        set((state) => ({
-          nearbyDevices: saved,
-          stats: {
-            ...state.stats,
-            activePeersCount: saved.length
-          }
-        }));
-      }
-    } catch (err) {
-      console.warn('Error loading saved mesh devices:', err);
-    }
-  }
+export const useMeshStore = create<MeshState>((set) => ({
+  ...initial,
+  set: (partial) => set(partial),
+  reset: () => set(initial),
 }));
+
+/** Phones we can hand a message to right now. */
+export function reachablePeers(peers: Record<string, Peer>, now = Date.now()): Peer[] {
+  return Object.values(peers).filter((p) => isReachable(p, now));
+}
+
+export function isReachable(p: Peer, now = Date.now()): boolean {
+  return p.nearbyConnected || (p.bleSeenAt != null && now - p.bleSeenAt < 45_000);
+}

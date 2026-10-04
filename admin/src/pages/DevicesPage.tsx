@@ -7,7 +7,7 @@ const DevicesPage = () => {
   const [devices, setDevices] = useState<DeviceItem[]>([]);
 
   useEffect(() => {
-    getDevices().then(setDevices);
+    getDevices().then(setDevices).catch((err) => console.error("Failed to load devices", err));
   }, []);
 
   return (

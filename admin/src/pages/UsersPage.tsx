@@ -6,14 +6,20 @@ import { Search, CheckCircle, XCircle } from 'lucide-react';
 const UsersPage = () => {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [search, setSearch] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getUsers().then(setUsers);
+    getUsers()
+      .then(setUsers)
+      .catch(() => setError('Could not reach the BartaSetu backend.'));
   }, []);
 
-  const filtered = users.filter(u => 
-    u.displayName.toLowerCase().includes(search.toLowerCase()) || 
-    u.id.toLowerCase().includes(search.toLowerCase())
+  const term = search.toLowerCase();
+  const filtered = users.filter(u =>
+    u.displayName.toLowerCase().includes(term) ||
+    u.id.toLowerCase().includes(term) ||
+    (u.bsId || '').toLowerCase().includes(term) ||
+    (u.username || '').toLowerCase().includes(term)
   );
 
   return (
@@ -36,8 +42,9 @@ const UsersPage = () => {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User ID</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">BartaSetu ID</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Display Name</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Joined</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Public Key</th>
             </tr>
@@ -45,8 +52,20 @@ const UsersPage = () => {
           <tbody className="bg-white divide-y divide-gray-200">
             {filtered.map(user => (
               <tr key={user.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{user.id}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{user.displayName}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                  <div className="font-mono font-semibold text-gray-900">{user.bsId || '-'}</div>
+                  <div className="text-xs text-gray-400">{user.id}</div>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  <div className="text-gray-900">{user.displayName}</div>
+                  {user.username && <div className="text-xs text-gray-400">@{user.username}</div>}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                  {user.isOnline ?
+                    <span className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-green-700">Online</span> :
+                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-gray-500">Offline</span>
+                  }
+                </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(user.creationDate).toLocaleDateString()}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   {user.hasPublicKey ? 
@@ -58,7 +77,8 @@ const UsersPage = () => {
             ))}
           </tbody>
         </table>
-        {filtered.length === 0 && <div className="p-6 text-center text-gray-500">No users found.</div>}
+        {error && <div className="p-6 text-center text-red-600">{error}</div>}
+        {!error && filtered.length === 0 && <div className="p-6 text-center text-gray-500">No users found.</div>}
       </div>
     </div>
   );

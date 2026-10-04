@@ -26,7 +26,7 @@ class MainApplication : Application(), ReactApplication {
         object : DefaultReactNativeHost(this) {
           override fun getPackages(): List<ReactPackage> {
             val packages = PackageList(this).packages.toMutableList()
-            packages.add(com.bartasetu.ble.BlePackage())
+            packages.add(com.bartasetu.mesh.MeshPackage())
             return packages
           }
 

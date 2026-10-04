@@ -10,6 +10,9 @@ export interface AdminStats {
 
 export interface UserItem {
   id: string;
+  bsId?: string | null;
+  username?: string;
+  isOnline?: boolean;
   displayName: string;
   creationDate: string;
   hasPublicKey: boolean;
@@ -29,7 +32,7 @@ export interface MessageItem {
   senderId: string;
   recipientId: string;
   hopCount: number;
-  status: 'SERVER_RECEIVED' | 'DELIVERED' | 'RELAYED';
+  status: string;
   routePreview: string;
   timestamp: string;
 }
@@ -38,7 +41,8 @@ export interface SOSAlertItem {
   id: string;
   userId: string;
   deviceId: string;
-  location: { lat: number; lon: number };
+  message?: string;
+  location: { lat: number; lon: number } | null;
   batteryLevel: number;
   timestamp: string;
   resolved: boolean;

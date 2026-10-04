@@ -62,6 +62,11 @@ object BleDataProtocol {
         val payload = ByteArray(chunk.size - HEADER_SIZE)
         buffer.get(payload)
 
+        // A new transfer from this peer replaces any half-finished one (e.g. after a dropped link)
+        if ((flag.toInt() and FLAG_START.toInt()) != 0) {
+            assemblyBuffers.remove(transferId)
+        }
+
         val assembly = assemblyBuffers.computeIfAbsent(transferId) {
             ChunkAssembly(totalChunks = total)
         }

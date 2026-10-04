@@ -36,7 +36,7 @@ const Sidebar = () => {
     <aside className="w-64 bg-gray-900 text-white min-h-screen flex flex-col">
       <div className="p-4 border-b border-gray-800">
         <h1 className="text-2xl font-bold text-brand-500">BartaSetu</h1>
-        <p className="text-xs text-gray-400 mt-1">বার্তা পৌঁছাবে, Internet না থাকলেও।</p>
+        <p className="text-xs text-gray-400 mt-1">Messages that arrive, even without internet.</p>
       </div>
       <nav className="flex-1 py-4">
         <ul className="space-y-1">

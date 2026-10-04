@@ -1,115 +1,121 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { Banner, Button, IconButton, Screen, TextField } from '../components/ui';
+import { colors, spacing, type } from '../theme';
 import { useAuthStore } from '../store/useAuthStore';
+import { RootStackParamList } from '../navigation/types';
 
-export default function RegisterScreen() {
-  const navigation = useNavigation<any>();
+type Props = NativeStackScreenProps<RootStackParamList, 'Register'>;
+
+const USERNAME_RE = /^[a-z0-9_.]{3,30}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export default function RegisterScreen({ navigation }: Props) {
+  const { register, busy, error, clearError } = useAuthStore();
+  const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
-  const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const { register, isLoading, error, clearError } = useAuthStore();
+  const [touched, setTouched] = useState(false);
 
-  const handleRegister = async () => {
-    if (!username.trim() || !email.trim() || !password) {
-      Alert.alert('Required Fields', 'Please fill in username, email, and password.');
-      return;
-    }
-    if (password !== confirmPassword) {
-      Alert.alert('Password Mismatch', 'Passwords do not match.');
-      return;
-    }
+  const errors = {
+    displayName: displayName.trim().length < 2 ? 'Enter your name' : null,
+    username: !USERNAME_RE.test(username.trim().toLowerCase())
+      ? '3-30 characters: letters, numbers, dots or underscores'
+      : null,
+    email: !EMAIL_RE.test(email.trim()) ? 'Enter a valid email address' : null,
+    password: password.length < 6 ? 'At least 6 characters' : null,
+  };
+  const valid = !Object.values(errors).some(Boolean);
 
-    clearError();
-    const success = await register({
-      username: username.trim(),
-      email: email.trim(),
-      password,
-      display_name: displayName.trim() || username.trim()
-    });
-
-    if (success) {
-      navigation.replace('Main');
-    }
+  const submit = () => {
+    setTouched(true);
+    if (valid) register({ displayName, username, email, password });
   };
 
+  const show = (e: string | null, value: string) => (touched || value.length > 0 ? e : null);
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.header}>Create Account</Text>
-      <Text style={styles.subHeader}>Join BartaSetu Mesh Network</Text>
+    <Screen edges={['top', 'bottom']}>
+      <View style={styles.topBar}>
+        <IconButton icon="arrow-back" label="Back" onPress={() => navigation.goBack()} />
+      </View>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <Text style={type.display}>Create your account</Text>
+          <Text style={[type.caption, { fontSize: 15, marginTop: 4, marginBottom: spacing.xl }]}>
+            You'll get a unique BartaSetu ID that friends use to find you.
+          </Text>
 
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          {error ? (
+            <Banner tone="danger" icon="alert-circle-outline" style={{ marginBottom: spacing.lg }}>{error}</Banner>
+          ) : null}
 
-      <TextInput
-        style={styles.input}
-        placeholder="Username"
-        placeholderTextColor="#64748b"
-        value={username}
-        onChangeText={setUsername}
-        autoCapitalize="none"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        placeholderTextColor="#64748b"
-        keyboardType="email-address"
-        autoCapitalize="none"
-        value={email}
-        onChangeText={setEmail}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Display Name"
-        placeholderTextColor="#64748b"
-        value={displayName}
-        onChangeText={setDisplayName}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        placeholderTextColor="#64748b"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Confirm Password"
-        placeholderTextColor="#64748b"
-        secureTextEntry
-        value={confirmPassword}
-        onChangeText={setConfirmPassword}
-      />
+          <TextField
+            label="Your name"
+            icon="person-outline"
+            value={displayName}
+            onChangeText={(t) => {
+              setDisplayName(t);
+              clearError();
+            }}
+            placeholder="e.g. Rahim Uddin"
+            autoComplete="name"
+            error={show(errors.displayName, displayName)}
+          />
+          <TextField
+            label="Username"
+            icon="at-outline"
+            value={username}
+            onChangeText={(t) => {
+              setUsername(t.toLowerCase());
+              clearError();
+            }}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="e.g. rahim"
+            error={show(errors.username, username)}
+          />
+          <TextField
+            label="Email"
+            icon="mail-outline"
+            value={email}
+            onChangeText={(t) => {
+              setEmail(t);
+              clearError();
+            }}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            autoComplete="email"
+            placeholder="you@example.com"
+            error={show(errors.email, email)}
+          />
+          <TextField
+            label="Password"
+            icon="lock-closed-outline"
+            value={password}
+            onChangeText={(t) => {
+              setPassword(t);
+              clearError();
+            }}
+            secure
+            autoComplete="password-new"
+            placeholder="At least 6 characters"
+            error={show(errors.password, password)}
+          />
 
-      <TouchableOpacity
-        style={[styles.button, isLoading && styles.buttonDisabled]}
-        onPress={handleRegister}
-        disabled={isLoading}
-      >
-        {isLoading ? (
-          <ActivityIndicator color="#ffffff" />
-        ) : (
-          <Text style={styles.buttonText}>Register</Text>
-        )}
-      </TouchableOpacity>
-
-      <TouchableOpacity onPress={() => navigation.navigate('Login')}>
-        <Text style={styles.link}>Already have an account? Login</Text>
-      </TouchableOpacity>
-    </View>
+          <Button title="Create account" onPress={submit} loading={busy} style={{ marginTop: spacing.sm }} />
+          <Text style={[type.small, styles.note]}>Creating an account needs an internet connection.</Text>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f172a', padding: 20, justifyContent: 'center' },
-  header: { fontSize: 32, color: '#f8fafc', fontWeight: 'bold', marginBottom: 5, textAlign: 'center' },
-  subHeader: { fontSize: 14, color: '#94a3b8', marginBottom: 20, textAlign: 'center' },
-  input: { backgroundColor: '#1e293b', color: '#f8fafc', padding: 14, borderRadius: 8, marginBottom: 12 },
-  button: { backgroundColor: '#10b981', padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 10, marginBottom: 15 },
-  buttonDisabled: { opacity: 0.6 },
-  buttonText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16 },
-  link: { color: '#3b82f6', textAlign: 'center', marginTop: 10 },
-  errorText: { color: '#ef4444', textAlign: 'center', marginBottom: 15, fontSize: 14 },
+  topBar: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
+  content: { paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: spacing.xxxl },
+  note: { textAlign: 'center', marginTop: spacing.md, color: colors.textMuted },
 });

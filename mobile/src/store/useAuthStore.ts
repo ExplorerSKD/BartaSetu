@@ -1,220 +1,102 @@
-/**
- * useAuthStore.ts
- * Zustand state store for User Authentication in BartaSetu mobile.
- * Manages user credentials, JWT tokens, session restoration,
- * and links authenticated session to ApiService and WebSocketService.
- */
-
 import { create } from 'zustand';
-import { apiService } from '../services/ApiService';
-import { webSocketService } from '../services/WebSocketService';
-import { messageService } from '../services/MessageService';
-import { AuthTokens, User, UserCreate, UserLogin } from '../types';
+import { api, apiErrorMessage } from '../services/api';
+import { session } from '../services/session';
+import { appEvents } from '../lib/events';
+import { AuthResponse, User } from '../types';
+import { useChatStore } from './useChatStore';
+
+type Status = 'loading' | 'signedOut' | 'signedIn';
 
 interface AuthState {
+  status: Status;
   user: User | null;
-  tokens: AuthTokens | null;
-  isAuthenticated: boolean;
-  isLoading: boolean;
+  busy: boolean;
   error: string | null;
+  /** Set right after registration so the app can show the new BartaSetu ID. */
+  justRegistered: boolean;
 
-  // Actions
-  login: (credentials: UserLogin) => Promise<boolean>;
-  register: (userData: UserCreate) => Promise<boolean>;
+  restore: () => Promise<void>;
+  login: (username: string, password: string) => Promise<boolean>;
+  register: (data: { displayName: string; username: string; email: string; password: string }) => Promise<boolean>;
   logout: () => Promise<void>;
-  restoreSession: () => Promise<boolean>;
-  setUser: (user: User | null) => void;
+  acknowledgeWelcome: () => void;
   clearError: () => void;
 }
 
-const STORAGE_KEYS = {
-  TOKENS: 'bartasetu_auth_tokens',
-  USER: 'bartasetu_auth_user'
-};
-
-// Safe storage helper with fallback
-async function getStorageItem(key: string): Promise<string | null> {
-  try {
-    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-    return await AsyncStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-async function setStorageItem(key: string, value: string): Promise<void> {
-  try {
-    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-    await AsyncStorage.setItem(key, value);
-  } catch {}
-}
-
-async function removeStorageItem(key: string): Promise<void> {
-  try {
-    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-    await AsyncStorage.removeItem(key);
-  } catch {}
+async function begin(res: AuthResponse) {
+  const tokens = { access: res.access_token, refresh: res.refresh_token };
+  await session.save(res.user, tokens);
+  await session.start(res.user, tokens);
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
+  status: 'loading',
   user: null,
-  tokens: null,
-  isAuthenticated: false,
-  isLoading: false,
+  busy: false,
   error: null,
+  justRegistered: false,
 
-  login: async (credentials: UserLogin) => {
-    set({ isLoading: true, error: null });
+  restore: async () => {
+    const saved = await session.loadSaved();
+    if (!saved) {
+      set({ status: 'signedOut' });
+      return;
+    }
+    // Works offline: the cached profile and local database are enough to use the mesh
+    await session.start(saved.user, saved.tokens);
+    set({ status: 'signedIn', user: saved.user });
+
+    // Refresh the profile in the background when the server is reachable
+    api.me()
+      .then(async (user) => {
+        set({ user });
+        await session.save(user, saved.tokens);
+      })
+      .catch(() => undefined);
+  },
+
+  login: async (username, password) => {
+    set({ busy: true, error: null });
     try {
-      const tokens = await apiService.login(credentials.username, credentials.password);
-      apiService.setTokens(tokens.access_token, tokens.refresh_token);
-
-      // Construct user profile
-      let user: User;
-      try {
-        const usersList = await apiService.getUsers(0, 100);
-        const matched = usersList.users.find((u) => u.username === credentials.username);
-        if (matched) {
-          user = matched;
-        } else {
-          user = {
-            id: `usr_${credentials.username}`,
-            username: credentials.username,
-            email: `${credentials.username}@bartasetu.local`,
-            display_name: credentials.username,
-            is_active: true
-          };
-        }
-      } catch {
-        user = {
-          id: `usr_${credentials.username}`,
-          username: credentials.username,
-          email: `${credentials.username}@bartasetu.local`,
-          display_name: credentials.username,
-          is_active: true
-        };
-      }
-
-      // Persist session
-      await setStorageItem(STORAGE_KEYS.TOKENS, JSON.stringify(tokens));
-      await setStorageItem(STORAGE_KEYS.USER, JSON.stringify(user));
-
-      // Connect services
-      messageService.setCurrentUserId(user.id);
-      webSocketService.connect(user.id);
-
-      set({
-        user,
-        tokens,
-        isAuthenticated: true,
-        isLoading: false,
-        error: null
-      });
-
+      const res = await api.login(username.trim(), password);
+      await begin(res);
+      set({ status: 'signedIn', user: res.user, busy: false });
       return true;
-    } catch (err: any) {
-      const errorMsg =
-        err?.response?.data?.detail || err?.message || 'Login failed. Please check your credentials.';
-      set({ isLoading: false, error: errorMsg });
+    } catch (err) {
+      set({ busy: false, error: apiErrorMessage(err, 'Could not sign in.') });
       return false;
     }
   },
 
-  register: async (userData: UserCreate) => {
-    set({ isLoading: true, error: null });
+  register: async ({ displayName, username, email, password }) => {
+    set({ busy: true, error: null });
     try {
-      const tokens = await apiService.register(userData);
-      apiService.setTokens(tokens.access_token, tokens.refresh_token);
-
-      const user: User = {
-        id: `usr_${userData.username}`,
-        username: userData.username,
-        email: userData.email,
-        display_name: userData.display_name || userData.username,
-        is_active: true
-      };
-
-      await setStorageItem(STORAGE_KEYS.TOKENS, JSON.stringify(tokens));
-      await setStorageItem(STORAGE_KEYS.USER, JSON.stringify(user));
-
-      messageService.setCurrentUserId(user.id);
-      webSocketService.connect(user.id);
-
-      set({
-        user,
-        tokens,
-        isAuthenticated: true,
-        isLoading: false,
-        error: null
+      const res = await api.register({
+        username: username.trim().toLowerCase(),
+        email: email.trim(),
+        password,
+        display_name: displayName.trim() || undefined,
       });
-
+      await begin(res);
+      set({ status: 'signedIn', user: res.user, busy: false, justRegistered: true });
       return true;
-    } catch (err: any) {
-      const errorMsg =
-        err?.response?.data?.detail || err?.message || 'Registration failed. Please try again.';
-      set({ isLoading: false, error: errorMsg });
+    } catch (err) {
+      set({ busy: false, error: apiErrorMessage(err, 'Could not create your account.') });
       return false;
     }
   },
 
   logout: async () => {
-    set({ isLoading: true });
-    try {
-      apiService.clearTokens();
-      webSocketService.disconnect();
-      messageService.setCurrentUserId(null);
-
-      await removeStorageItem(STORAGE_KEYS.TOKENS);
-      await removeStorageItem(STORAGE_KEYS.USER);
-    } catch (e) {
-      console.warn('Error during logout cleanup:', e);
-    } finally {
-      set({
-        user: null,
-        tokens: null,
-        isAuthenticated: false,
-        isLoading: false,
-        error: null
-      });
-    }
+    await session.stop();
+    await session.clearSaved();
+    useChatStore.setState({ conversations: [], contacts: [], messages: [], activePeerId: null });
+    set({ status: 'signedOut', user: null, justRegistered: false, error: null });
   },
 
-  restoreSession: async () => {
-    set({ isLoading: true });
-    try {
-      const tokensStr = await getStorageItem(STORAGE_KEYS.TOKENS);
-      const userStr = await getStorageItem(STORAGE_KEYS.USER);
-
-      if (tokensStr && userStr) {
-        const tokens: AuthTokens = JSON.parse(tokensStr);
-        const user: User = JSON.parse(userStr);
-
-        apiService.setTokens(tokens.access_token, tokens.refresh_token);
-        messageService.setCurrentUserId(user.id);
-        webSocketService.connect(user.id);
-
-        set({
-          user,
-          tokens,
-          isAuthenticated: true,
-          isLoading: false,
-          error: null
-        });
-        return true;
-      }
-    } catch (err) {
-      console.warn('Session restoration failed:', err);
-    }
-
-    set({ isLoading: false });
-    return false;
-  },
-
-  setUser: (user: User | null) => {
-    set({ user, isAuthenticated: !!user });
-  },
-
-  clearError: () => {
-    set({ error: null });
-  }
+  acknowledgeWelcome: () => set({ justRegistered: false }),
+  clearError: () => set({ error: null }),
 }));
+
+appEvents.on('sessionExpired', () => {
+  if (useAuthStore.getState().status === 'signedIn') void useAuthStore.getState().logout();
+});

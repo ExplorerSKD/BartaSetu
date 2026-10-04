@@ -3,6 +3,8 @@ from typing import Optional
 from datetime import datetime
 
 class DeviceRegister(BaseModel):
+    # Id returned by an earlier registration; re-registering with it updates instead of duplicating
+    id: Optional[str] = None
     device_name: str
     fcm_token: Optional[str] = None
     platform: str = "android"

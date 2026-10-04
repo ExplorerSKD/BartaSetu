@@ -3,14 +3,18 @@ package com.bartasetu.ble
 import java.util.UUID
 
 object BleConstants {
-    // Custom BartaSetu BLE Service UUID
-    val SERVICE_UUID: UUID = UUID.fromString("0000barta-0000-1000-8000-00805f9b34fb")
+    // Custom 128-bit BartaSetu UUIDs (must be valid hex; the old "0000barta-..." values crashed UUID.fromString)
+    val SERVICE_UUID: UUID = UUID.fromString("7b1c0000-4f2a-4b8e-9d3c-5a6e8f1b2c3d")
 
     // Characteristics
-    val CHAR_MESSAGE_WRITE: UUID = UUID.fromString("0001barta-0000-1000-8000-00805f9b34fb")
-    val CHAR_MESSAGE_IDS: UUID = UUID.fromString("0002barta-0000-1000-8000-00805f9b34fb")
-    val CHAR_DEVICE_INFO: UUID = UUID.fromString("0003barta-0000-1000-8000-00805f9b34fb")
-    val CHAR_HANDSHAKE: UUID = UUID.fromString("0004barta-0000-1000-8000-00805f9b34fb")
+    val CHAR_MESSAGE_WRITE: UUID = UUID.fromString("7b1c0001-4f2a-4b8e-9d3c-5a6e8f1b2c3d")
+    val CHAR_HANDSHAKE: UUID = UUID.fromString("7b1c0004-4f2a-4b8e-9d3c-5a6e8f1b2c3d")
+
+    const val TRANSPORT = "ble"
+
+    // Advertised service data: [flags, battery, 6 ASCII chars of the BartaSetu ID]
+    const val FLAG_HAS_INTERNET = 0x01
+    const val SERVICE_DATA_LENGTH = 8
 
     // MTU Configuration
     const val MAX_MTU = 512
@@ -19,7 +23,8 @@ object BleConstants {
     // Timings
     const val SCAN_PERIOD_MS = 10_000L
     const val SCAN_INTERVAL_MS = 5_000L
-    const val CONNECTION_TIMEOUT_MS = 30_000L
+    const val CONNECTION_TIMEOUT_MS = 15_000L
+    const val PEER_EXPIRY_MS = 45_000L
     const val MAX_RETRIES = 3
 
     // Notifications

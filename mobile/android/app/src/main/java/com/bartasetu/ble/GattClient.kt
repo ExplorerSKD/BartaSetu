@@ -4,130 +4,112 @@ import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.content.Context
 import android.os.Handler
-import android.os.HandlerThread
+import android.os.Looper
 import android.util.Log
-import java.util.*
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Delivers one payload to a peer's GATT server:
+ * connect -> negotiate MTU -> discover services -> write chunks one at a time -> disconnect.
+ * [onTransferComplete] is called exactly once.
+ */
 class GattClient(
     private val context: Context,
     private val device: BluetoothDevice,
+    private val payloadBytes: ByteArray,
     private val onTransferComplete: (success: Boolean) -> Unit
 ) {
     private val tag = "BartaSetu.GattClient"
+    private val handler = Handler(Looper.getMainLooper())
+    private val finished = AtomicBoolean(false)
     private var gatt: BluetoothGatt? = null
-    private var currentMtu = BleConstants.DEFAULT_MTU
+    private var chunks: List<ByteArray> = emptyList()
+    private var nextChunk = 0
 
-    // Sequential GATT command queue prevents race conditions
-    private val commandQueue = ConcurrentLinkedQueue<Runnable>()
-    private var isExecutingCommand = false
-    private val handlerThread = HandlerThread("GattClientQueue-${device.address}").apply { start() }
-    private val queueHandler = Handler(handlerThread.looper)
+    private val timeout = Runnable {
+        Log.w(tag, "Transfer to ${device.address} timed out")
+        finish(false)
+    }
 
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
-        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.i(tag, "Connected to GATT server on ${device.address}. Requesting MTU 512...")
-                gatt?.requestMtu(BleConstants.MAX_MTU)
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                Log.i(tag, "Disconnected from ${device.address}")
-                cleanup()
-                onTransferComplete(false)
+                gatt.requestMtu(BleConstants.MAX_MTU)
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
+                finish(false)
             }
         }
 
         @SuppressLint("MissingPermission")
-        override fun onMtuChanged(gatt: BluetoothGatt?, mtu: Int, status: Int) {
-            currentMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else BleConstants.DEFAULT_MTU
-            Log.i(tag, "Negotiated MTU: $currentMtu with ${device.address}. Discovering services...")
-            gatt?.discoverServices()
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            val effectiveMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else BleConstants.DEFAULT_MTU
+            chunks = BleDataProtocol.chunkPayload(payloadBytes, effectiveMtu)
+            gatt.discoverServices()
         }
 
-        override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.i(tag, "Services discovered on ${device.address}. Ready to transmit.")
-                processNextCommand()
-            } else {
-                Log.e(tag, "Service discovery failed on ${device.address}")
-                cleanup()
-                onTransferComplete(false)
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                finish(false)
+                return
             }
+            writeNext()
         }
 
         override fun onCharacteristicWrite(
-            gatt: BluetoothGatt?,
-            characteristic: BluetoothGattCharacteristic?,
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
-            isExecutingCommand = false
-            processNextCommand()
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                finish(false)
+                return
+            }
+            writeNext()
         }
     }
 
     @SuppressLint("MissingPermission")
     fun connect() {
+        handler.postDelayed(timeout, BleConstants.CONNECTION_TIMEOUT_MS)
         gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
 
-    fun enqueuePayload(payloadBytes: ByteArray) {
-        val chunks = BleDataProtocol.chunkPayload(payloadBytes, currentMtu)
-        Log.i(tag, "Queueing ${chunks.size} chunks for transmission to ${device.address}")
-
-        for ((index, chunk) in chunks.withIndex()) {
-            commandQueue.add(Runnable {
-                writeChunk(chunk, isLast = (index == chunks.size - 1))
-            })
-        }
-        processNextCommand()
-    }
-
     @SuppressLint("MissingPermission")
-    private fun writeChunk(chunk: ByteArray, isLast: Boolean) {
-        val service = gatt?.getService(BleConstants.SERVICE_UUID)
-        val charWrite = service?.getCharacteristic(BleConstants.CHAR_MESSAGE_WRITE)
-        if (charWrite == null) {
-            Log.e(tag, "Write characteristic not found")
-            onTransferComplete(false)
-            cleanup()
+    @Suppress("DEPRECATION")
+    private fun writeNext() {
+        if (nextChunk >= chunks.size) {
+            Log.i(tag, "Delivered ${chunks.size} chunks to ${device.address}")
+            finish(true)
             return
         }
-
-        charWrite.value = chunk
-        charWrite.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-        val initiated = gatt?.writeCharacteristic(charWrite) ?: false
-
-        if (!initiated) {
-            Log.e(tag, "Failed to initiate chunk write")
-            onTransferComplete(false)
-            cleanup()
-        } else if (isLast) {
-            Log.i(tag, "All chunks transmitted successfully to ${device.address}")
-            onTransferComplete(true)
-            cleanup()
+        val characteristic = gatt?.getService(BleConstants.SERVICE_UUID)
+            ?.getCharacteristic(BleConstants.CHAR_MESSAGE_WRITE)
+        if (characteristic == null) {
+            Log.e(tag, "BartaSetu service not found on ${device.address}")
+            finish(false)
+            return
         }
-    }
-
-    private fun processNextCommand() {
-        queueHandler.post {
-            if (isExecutingCommand || commandQueue.isEmpty()) return@post
-            val command = commandQueue.poll()
-            if (command != null) {
-                isExecutingCommand = true
-                command.run()
-            }
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        characteristic.value = chunks[nextChunk++]
+        if (gatt?.writeCharacteristic(characteristic) != true) {
+            finish(false)
         }
     }
 
     @SuppressLint("MissingPermission")
-    fun cleanup() {
+    private fun finish(success: Boolean) {
+        if (!finished.compareAndSet(false, true)) return
+        handler.removeCallbacks(timeout)
         try {
             gatt?.disconnect()
             gatt?.close()
-            gatt = null
-            handlerThread.quitSafely()
         } catch (e: Exception) {
-            Log.e(tag, "Error cleaning up GattClient: ${e.message}")
+            Log.e(tag, "Error closing GATT: ${e.message}")
         }
+        gatt = null
+        onTransferComplete(success)
     }
+
+    fun cancel() = finish(false)
 }

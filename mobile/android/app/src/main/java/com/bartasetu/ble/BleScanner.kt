@@ -8,27 +8,25 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
+import com.bartasetu.mesh.PeerInfo
 
 class BleScanner(
     private val bluetoothAdapter: BluetoothAdapter,
-    private val onDeviceDiscovered: (device: BluetoothDevice, rssi: Int, scanRecord: ScanRecord?) -> Unit
+    private val onDeviceDiscovered: (device: BluetoothDevice, rssi: Int, info: PeerInfo?) -> Unit
 ) {
     private val tag = "BartaSetu.BleScanner"
     private var scanner: BluetoothLeScanner? = null
     private var isScanning = false
+    private var enabled = false
     private val handler = Handler(Looper.getMainLooper())
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
-            result?.let {
-                onDeviceDiscovered(it.device, it.rssi, it.scanRecord)
-            }
+            result?.let { report(it) }
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>?) {
-            results?.forEach {
-                onDeviceDiscovered(it.device, it.rssi, it.scanRecord)
-            }
+            results?.forEach { report(it) }
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -36,9 +34,20 @@ class BleScanner(
         }
     }
 
-    @SuppressLint("MissingPermission")
+    private fun report(result: ScanResult) {
+        val serviceData = result.scanRecord?.getServiceData(ParcelUuid(BleConstants.SERVICE_UUID))
+        onDeviceDiscovered(result.device, result.rssi, BleAdvertiser.decodeServiceData(serviceData))
+    }
+
+    /** Duty-cycled scanning (scan 10 s, pause 5 s) to save battery. */
     fun startScanning() {
-        if (isScanning) return
+        enabled = true
+        scanOnce()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun scanOnce() {
+        if (!enabled || isScanning) return
         scanner = bluetoothAdapter.bluetoothLeScanner
         if (scanner == null) {
             Log.w(tag, "BluetoothLeScanner not available")
@@ -57,12 +66,9 @@ class BleScanner(
         try {
             scanner?.startScan(listOf(filter), settings, scanCallback)
             isScanning = true
-            Log.i(tag, "BLE Scanning started for Service: ${BleConstants.SERVICE_UUID}")
-
-            // Schedule periodic pause to save battery
             handler.postDelayed({
-                stopScanning()
-                handler.postDelayed({ startScanning() }, BleConstants.SCAN_INTERVAL_MS)
+                pause()
+                handler.postDelayed({ scanOnce() }, BleConstants.SCAN_INTERVAL_MS)
             }, BleConstants.SCAN_PERIOD_MS)
         } catch (e: Exception) {
             Log.e(tag, "Error starting BLE scan: ${e.message}")
@@ -70,14 +76,19 @@ class BleScanner(
     }
 
     @SuppressLint("MissingPermission")
-    fun stopScanning() {
+    private fun pause() {
         if (!isScanning) return
         try {
             scanner?.stopScan(scanCallback)
-            isScanning = false
-            Log.i(tag, "BLE Scanning stopped")
         } catch (e: Exception) {
             Log.e(tag, "Error stopping BLE scan: ${e.message}")
         }
+        isScanning = false
+    }
+
+    fun stopScanning() {
+        enabled = false
+        handler.removeCallbacksAndMessages(null)
+        pause()
     }
 }

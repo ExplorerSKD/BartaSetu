@@ -1,416 +1,249 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-  ScrollView
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useSOSStore } from '../store/useSOSStore';
-import { LocationService } from '../services/LocationService';
-import { EmergencyType, LocationCoordinates } from '../types';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert, Animated, Easing, Pressable, ScrollView, StyleSheet, Text, TextInput, Vibration, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { AppHeader, Card, Screen, SectionLabel } from '../components/ui';
+import { colors, radius, spacing, type } from '../theme';
+import { formatClock, formatDistance, haversineMeters, timeAgo } from '../lib/format';
+import { device, Coordinates } from '../services/device';
+import { mesh } from '../services/mesh';
+import { reachablePeers, useMeshStore } from '../store/useMeshStore';
 
-const EMERGENCY_PRESETS: { type: EmergencyType; label: string; icon: string }[] = [
-  { type: 'Medical', label: 'Medical Trauma', icon: '🚑' },
-  { type: 'Flood', label: 'Flood / Cyclone', icon: '🌊' },
-  { type: 'Trapped', label: 'Trapped / Structural', icon: '🏚️' },
-  { type: 'Fire', label: 'Fire / Hazard', icon: '🔥' },
-  { type: 'General Emergency', label: 'General SOS', icon: '🚨' },
+type IconName = keyof typeof Ionicons.glyphMap;
+
+const CATEGORIES: Array<{ key: string; label: string; icon: IconName }> = [
+  { key: 'Medical', label: 'Medical', icon: 'medkit-outline' },
+  { key: 'Flood', label: 'Flood / Cyclone', icon: 'water-outline' },
+  { key: 'Trapped', label: 'Trapped', icon: 'home-outline' },
+  { key: 'Fire', label: 'Fire', icon: 'flame-outline' },
+  { key: 'Other', label: 'Other', icon: 'alert-circle-outline' },
 ];
 
-export default function SOSScreen() {
-  const {
-    activeAlerts,
-    isTriggering,
-    selectedEmergencyType,
-    setSelectedEmergencyType,
-    triggerSOS,
-    resolveSOS,
-    loadAlerts
-  } = useSOSStore();
+const HOLD_MS = 1500;
 
-  const [currentLocation, setCurrentLocation] = useState<LocationCoordinates>({
-    latitude: 22.5726,
-    longitude: 88.3639,
-    accuracy: 5
-  });
+export default function SOSScreen() {
+  const online = useMeshStore((s) => s.online);
+  const peers = useMeshStore((s) => s.peers);
+  const lastSos = useMeshStore((s) => s.lastSos);
+  const nearbyAlerts = useMeshStore((s) => s.nearbyAlerts);
+  const [category, setCategory] = useState('Medical');
+  const [note, setNote] = useState('');
+  const [location, setLocation] = useState<Coordinates | null>(device.lastKnownLocation());
+  const [battery, setBattery] = useState<number | null>(null);
+  const [sending, setSending] = useState(false);
+  const progress = useRef(new Animated.Value(0)).current;
+  const holdAnim = useRef<Animated.CompositeAnimation | null>(null);
+
+  const nearbyCount = reachablePeers(peers).length;
 
   useEffect(() => {
-    loadAlerts();
-    LocationService.getCurrentLocation().then(setCurrentLocation);
-  }, [loadAlerts]);
+    device.batteryPercent().then(setBattery);
+    device.approximateLocation().then((loc) => loc && setLocation(loc));
+  }, []);
 
-  const handleTriggerSOS = async () => {
-    Alert.alert(
-      '🚨 BROADCAST EMERGENCY SOS',
-      `Transmit immediate distress beacon (${selectedEmergencyType}) to all nearby mesh nodes, gateways, and rescue teams?`,
-      [
-        { text: 'CANCEL', style: 'cancel' },
-        {
-          text: 'CONFIRM SOS TRANSMIT',
-          style: 'destructive',
-          onPress: async () => {
-            await triggerSOS(
-              `CRITICAL DISTRESS: ${selectedEmergencyType}. Requesting evacuation or assistance.`,
-              selectedEmergencyType
-            );
-          }
-        }
-      ]
-    );
+  const startHold = () => {
+    if (sending) return;
+    Vibration.vibrate(30);
+    holdAnim.current = Animated.timing(progress, { toValue: 1, duration: HOLD_MS, easing: Easing.linear, useNativeDriver: false });
+    holdAnim.current.start(({ finished }) => {
+      if (finished) void fire();
+    });
   };
 
+  const cancelHold = () => {
+    holdAnim.current?.stop();
+    Animated.timing(progress, { toValue: 0, duration: 200, useNativeDriver: false }).start();
+  };
+
+  const fire = async () => {
+    setSending(true);
+    Vibration.vibrate([0, 200, 100, 200]);
+    try {
+      await mesh.sendSos(category, note.trim() || 'I need help');
+      setLocation(device.lastKnownLocation());
+    } catch (err) {
+      Alert.alert('SOS not sent', err instanceof Error ? err.message : 'Please try again.');
+    } finally {
+      setSending(false);
+      progress.setValue(0);
+    }
+  };
+
+  const sosStatus = (() => {
+    if (!lastSos) return null;
+    switch (lastSos.state) {
+      case 'sending':
+        return { icon: 'sync' as IconName, text: 'Sending your SOS…', color: colors.textSecondary };
+      case 'server':
+        return { icon: 'checkmark-circle' as IconName, text: 'Delivered to emergency responders (server)', color: colors.primaryDark };
+      case 'mesh':
+        return {
+          icon: 'bluetooth' as IconName,
+          text: `Shared with ${lastSos.sharedWith || 'nearby'} phone${lastSos.sharedWith === 1 ? '' : 's'}. It will reach responders as soon as one has internet.`,
+          color: colors.nearby,
+        };
+      case 'waiting':
+        return { icon: 'time-outline' as IconName, text: 'Saved. It will be broadcast the moment a nearby phone or internet is found.', color: colors.nearby };
+      default:
+        return { icon: 'alert-circle' as IconName, text: 'Could not send. Try again.', color: colors.danger };
+    }
+  })();
+
+  const ringScale = progress.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] });
+
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        {/* Urgent Warning Header */}
-        <View style={styles.header}>
-          <View style={styles.priorityPill}>
-            <View style={styles.flashingDot} />
-            <Text style={styles.priorityText}>PRIORITY 1: DISASTER RELAY</Text>
+    <Screen>
+      <AppHeader title="Emergency SOS" subtitle="Sends your location to responders and nearby phones" />
+      <ScrollView contentContainerStyle={{ paddingBottom: spacing.xxxl }} keyboardShouldPersistTaps="handled">
+        <View style={styles.routeRow}>
+          <View style={[styles.routeChip, online ? styles.chipOn : styles.chipOff]}>
+            <Ionicons name={online ? 'globe-outline' : 'cloud-offline-outline'} size={14} color={online ? colors.primaryDark : colors.textSecondary} />
+            <Text style={[styles.routeText, { color: online ? colors.primaryDark : colors.textSecondary }]}>{online ? 'Internet' : 'No internet'}</Text>
           </View>
-          <Text style={styles.headerTitle}>Emergency SOS Beacon</Text>
-          <Text style={styles.headerSub}>
-            Broadcasts at highest priority across BLE mesh nodes without internet.
-          </Text>
+          <View style={[styles.routeChip, nearbyCount > 0 ? styles.chipNearby : styles.chipOff]}>
+            <Ionicons name="bluetooth" size={14} color={nearbyCount > 0 ? colors.nearby : colors.textSecondary} />
+            <Text style={[styles.routeText, { color: nearbyCount > 0 ? colors.nearby : colors.textSecondary }]}>
+              {nearbyCount} nearby
+            </Text>
+          </View>
         </View>
 
-        {/* Live GPS Telemetry Box */}
-        <View style={styles.telemetryCard}>
-          <View style={styles.telemetryRow}>
-            <View style={styles.telemetryItem}>
-              <Text style={styles.telemetryLabel}>GPS COORDINATES</Text>
-              <Text style={styles.telemetryVal}>
-                {currentLocation.latitude.toFixed(4)}° N, {currentLocation.longitude.toFixed(4)}° E
+        <View style={styles.buttonArea}>
+          <Animated.View style={[styles.halo, { transform: [{ scale: ringScale }] }]} />
+          <Pressable onPressIn={startHold} onPressOut={cancelHold} disabled={sending} accessibilityLabel="Hold to send SOS">
+            <View style={styles.sosButton}>
+              <Animated.View
+                style={[styles.fill, { height: progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) }]}
+              />
+              <Text style={styles.sosText}>SOS</Text>
+              <Text style={styles.sosHint}>{sending ? 'SENDING…' : 'HOLD TO SEND'}</Text>
+            </View>
+          </Pressable>
+        </View>
+
+        {sosStatus && lastSos ? (
+          <Card style={[styles.block, { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' }]}>
+            <Ionicons name={sosStatus.icon} size={22} color={sosStatus.color} />
+            <View style={{ flex: 1 }}>
+              <Text style={[type.bodyStrong, { color: sosStatus.color }]}>{sosStatus.text}</Text>
+              <Text style={type.small}>
+                {lastSos.category} alert at {formatClock(lastSos.createdAt)}{lastSos.hasLocation ? '' : ' · location unavailable'}
               </Text>
             </View>
-            <View style={styles.telemetryDivider} />
-            <View style={styles.telemetryItem}>
-              <Text style={styles.telemetryLabel}>BATTERY</Text>
-              <Text style={styles.telemetryVal}>🔋 85%</Text>
-            </View>
-          </View>
-        </View>
+          </Card>
+        ) : null}
 
-        {/* Giant Pulsating SOS Button */}
-        <View style={styles.sosButtonContainer}>
-          {/* Radar ripple rings */}
-          <View style={styles.rippleOuter}>
-            <View style={styles.rippleMiddle}>
-              <TouchableOpacity
-                style={[styles.bigSosButton, isTriggering && styles.bigSosButtonDisabled]}
-                onPress={handleTriggerSOS}
-                disabled={isTriggering}
-                activeOpacity={0.8}
-              >
-                {isTriggering ? (
-                  <ActivityIndicator size="large" color="#FFFFFF" />
-                ) : (
-                  <View style={styles.sosButtonInner}>
-                    <Text style={styles.sosSymbol}>SOS</Text>
-                    <Text style={styles.sosSubPrompt}>TAP TO BROADCAST</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
+        <SectionLabel style={styles.block}>What's happening?</SectionLabel>
+        <View style={[styles.block, styles.categories]}>
+          {CATEGORIES.map((c) => (
+            <Pressable key={c.key} onPress={() => setCategory(c.key)} style={[styles.category, category === c.key && styles.categoryActive]}>
+              <Ionicons name={c.icon} size={18} color={category === c.key ? colors.danger : colors.textSecondary} />
+              <Text style={[styles.categoryText, category === c.key && { color: colors.dangerDark }]}>{c.label}</Text>
+            </Pressable>
+          ))}
         </View>
+        <TextInput
+          value={note}
+          onChangeText={setNote}
+          placeholder="Add details (optional), e.g. 3 people, need boat"
+          placeholderTextColor={colors.textMuted}
+          style={[styles.block, styles.note]}
+          maxLength={200}
+        />
 
-        {/* Emergency Category Selector */}
-        <View style={styles.categorySection}>
-          <Text style={styles.categorySectionTitle}>SELECT EMERGENCY CATEGORY</Text>
-          <View style={styles.categoryGrid}>
-            {EMERGENCY_PRESETS.map((p) => {
-              const isSelected = selectedEmergencyType === p.type;
-              return (
-                <TouchableOpacity
-                  key={p.type}
-                  style={[styles.categoryCard, isSelected && styles.categoryCardSelected]}
-                  onPress={() => setSelectedEmergencyType(p.type)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.categoryIcon}>{p.icon}</Text>
-                  <Text style={[styles.categoryLabel, isSelected && styles.categoryLabelSelected]}>
-                    {p.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* Active Emergencies Feed */}
-        {activeAlerts && activeAlerts.length > 0 && (
-          <View style={styles.activeAlertsSection}>
-            <Text style={styles.activeAlertsTitle}>
-              ACTIVE DISTRESS BEACONS ({activeAlerts.length})
+        <Card style={[styles.block, styles.infoRow]}>
+          <View style={styles.infoItem}>
+            <Text style={type.label}>Location</Text>
+            <Text style={type.bodyStrong}>
+              {location ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}` : 'Fetched when you send'}
             </Text>
-            {activeAlerts.map((alert) => (
-              <View key={alert.id} style={styles.activeAlertCard}>
-                <View style={styles.activeAlertTop}>
-                  <Text style={styles.activeAlertIcon}>🚨</Text>
-                  <View style={styles.activeAlertMeta}>
-                    <Text style={styles.activeAlertMsg}>{alert.message}</Text>
-                    <Text style={styles.activeAlertTime}>
-                      {new Date(alert.timestamp).toLocaleTimeString()} • Lat: {alert.location?.latitude.toFixed(3)}, Lon: {alert.location?.longitude.toFixed(3)}
+          </View>
+          <View style={styles.infoDivider} />
+          <View style={[styles.infoItem, { flex: 0.5 }]}>
+            <Text style={type.label}>Battery</Text>
+            <Text style={type.bodyStrong}>{battery != null ? `${battery}%` : '-'}</Text>
+          </View>
+        </Card>
+
+        {nearbyAlerts.length > 0 ? (
+          <>
+            <SectionLabel style={styles.block}>Alerts from people near you</SectionLabel>
+            {nearbyAlerts.map((a) => {
+              const distance =
+                location && a.latitude != null && a.longitude != null
+                  ? formatDistance(haversineMeters(location.latitude, location.longitude, a.latitude, a.longitude))
+                  : null;
+              return (
+                <Card key={a.id} style={[styles.block, styles.alertCard]}>
+                  <Ionicons name="warning" size={22} color={colors.danger} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={type.bodyStrong}>{a.name} · {a.category}</Text>
+                    <Text style={type.caption}>{a.message}</Text>
+                    <Text style={type.small}>
+                      {[distance && `${distance} away`, a.battery != null && `${a.battery}% battery`, `${a.hopCount} hop${a.hopCount === 1 ? '' : 's'}`, timeAgo(a.receivedAt)]
+                        .filter(Boolean)
+                        .join(' · ')}
                     </Text>
                   </View>
-                </View>
-                <TouchableOpacity
-                  style={styles.resolveBtn}
-                  onPress={() => resolveSOS(alert.id)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.resolveBtnText}>MARK RESOLVED ✓</Text>
-                </TouchableOpacity>
-              </View>
-            ))}
-          </View>
-        )}
+                </Card>
+              );
+            })}
+          </>
+        ) : null}
       </ScrollView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
+const SIZE = 196;
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#070A13',
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 40,
-  },
-  header: {
+  block: { marginHorizontal: spacing.lg, marginTop: spacing.md },
+  routeRow: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm, marginTop: spacing.sm },
+  routeChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radius.pill },
+  chipOn: { backgroundColor: colors.primarySoft },
+  chipNearby: { backgroundColor: colors.nearbySoft },
+  chipOff: { backgroundColor: colors.surface },
+  routeText: { fontSize: 13, fontWeight: '700' },
+  buttonArea: { alignItems: 'center', justifyContent: 'center', height: SIZE + 80 },
+  halo: { position: 'absolute', width: SIZE + 44, height: SIZE + 44, borderRadius: (SIZE + 44) / 2, backgroundColor: colors.dangerSoft },
+  sosButton: {
+    width: SIZE,
+    height: SIZE,
+    borderRadius: SIZE / 2,
+    backgroundColor: colors.danger,
     alignItems: 'center',
-    marginBottom: 20,
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderWidth: 6,
+    borderColor: '#FCA5A5',
   },
-  priorityPill: {
+  fill: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.dangerDark },
+  sosText: { color: '#fff', fontSize: 52, fontWeight: '900', letterSpacing: 4 },
+  sosHint: { color: '#FEE2E2', fontSize: 12, fontWeight: '800', letterSpacing: 1.5, marginTop: 2 },
+  categories: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: 0 },
+  category: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    gap: 6,
     paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 20,
+    paddingVertical: 9,
+    borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.4)',
-    marginBottom: 10,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
   },
-  flashingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#EF4444',
-    marginRight: 6,
+  categoryActive: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
+  categoryText: { fontSize: 14, fontWeight: '600', color: colors.textSecondary },
+  note: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: colors.text,
   },
-  priorityText: {
-    color: '#F87171',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-  },
-  headerTitle: {
-    fontSize: 26,
-    fontWeight: '900',
-    color: '#F8FAFC',
-    letterSpacing: -0.5,
-  },
-  headerSub: {
-    fontSize: 12,
-    color: '#94A3B8',
-    textAlign: 'center',
-    marginTop: 4,
-    maxWidth: 300,
-    lineHeight: 16,
-  },
-  telemetryCard: {
-    backgroundColor: '#0F172A',
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    marginBottom: 24,
-  },
-  telemetryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  telemetryItem: {
-    flex: 1,
-  },
-  telemetryDivider: {
-    width: 1,
-    height: 28,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    marginHorizontal: 12,
-  },
-  telemetryLabel: {
-    color: '#64748B',
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  telemetryVal: {
-    color: '#F1F5F9',
-    fontSize: 13,
-    fontWeight: '700',
-    marginTop: 3,
-  },
-  sosButtonContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: 10,
-  },
-  rippleOuter: {
-    width: 230,
-    height: 230,
-    borderRadius: 115,
-    backgroundColor: 'rgba(220, 38, 38, 0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rippleMiddle: {
-    width: 190,
-    height: 190,
-    borderRadius: 95,
-    backgroundColor: 'rgba(220, 38, 38, 0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bigSosButton: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: '#DC2626',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#DC2626',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-    elevation: 16,
-    borderWidth: 3,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
-  },
-  bigSosButtonDisabled: {
-    opacity: 0.6,
-  },
-  sosButtonInner: {
-    alignItems: 'center',
-  },
-  sosSymbol: {
-    color: '#FFFFFF',
-    fontSize: 40,
-    fontWeight: '900',
-    letterSpacing: 3,
-  },
-  sosSubPrompt: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 1,
-    marginTop: 2,
-  },
-  categorySection: {
-    marginTop: 24,
-    marginBottom: 20,
-  },
-  categorySectionTitle: {
-    color: '#64748B',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    marginBottom: 12,
-  },
-  categoryGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  categoryCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0F172A',
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-  },
-  categoryCardSelected: {
-    backgroundColor: 'rgba(220, 38, 38, 0.2)',
-    borderColor: '#DC2626',
-  },
-  categoryIcon: {
-    fontSize: 16,
-    marginRight: 8,
-  },
-  categoryLabel: {
-    color: '#94A3B8',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  categoryLabelSelected: {
-    color: '#F87171',
-    fontWeight: '800',
-  },
-  activeAlertsSection: {
-    marginTop: 10,
-  },
-  activeAlertsTitle: {
-    color: '#EF4444',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1,
-    marginBottom: 10,
-  },
-  activeAlertCard: {
-    backgroundColor: '#0F172A',
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
-    marginBottom: 10,
-  },
-  activeAlertTop: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 10,
-  },
-  activeAlertIcon: {
-    fontSize: 20,
-    marginRight: 10,
-  },
-  activeAlertMeta: {
-    flex: 1,
-  },
-  activeAlertMsg: {
-    color: '#F8FAFC',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  activeAlertTime: {
-    color: '#64748B',
-    fontSize: 10,
-    marginTop: 4,
-  },
-  resolveBtn: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-    borderRadius: 8,
-    paddingVertical: 8,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#10B981',
-  },
-  resolveBtnText: {
-    color: '#34D399',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-  },
+  infoRow: { flexDirection: 'row', alignItems: 'center' },
+  infoItem: { flex: 1, gap: 4 },
+  infoDivider: { width: 1, alignSelf: 'stretch', backgroundColor: colors.border, marginHorizontal: spacing.md },
+  alertCard: { flexDirection: 'row', gap: spacing.md, borderColor: colors.dangerBorder, backgroundColor: colors.dangerSoft },
 });

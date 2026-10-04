@@ -14,6 +14,7 @@ class UserLogin(BaseModel):
 
 class UserResponse(BaseModel):
     id: str
+    bs_id: Optional[str] = None
     username: str
     email: str
     display_name: Optional[str] = None
@@ -26,3 +27,12 @@ class UserResponse(BaseModel):
 class UserListResponse(BaseModel):
     users: list[UserResponse]
     total: int
+
+class PublicUserResponse(BaseModel):
+    """Profile visible to other users: no email or account details."""
+    id: str
+    bs_id: Optional[str] = None
+    username: str
+    display_name: Optional[str] = None
+    public_key: Optional[str] = None
+    is_online: bool = False

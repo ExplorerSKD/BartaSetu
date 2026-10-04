@@ -8,6 +8,7 @@ from app.models.message import Message
 from app.models.sos_alert import SOSAlert
 from app.models.message_route import MessageRoute
 from app.models.public_key import PublicKey
+from app.websocket.manager import manager
 
 router = APIRouter()
 
@@ -78,8 +79,10 @@ async def get_admin_users(db: AsyncSession = Depends(get_db)):
     for u in users:
         user_items.append({
             "id": u.id,
+            "bsId": u.bs_id,
             "displayName": u.display_name or u.username,
             "username": u.username,
+            "isOnline": manager.is_online(u.id),
             "email": u.email,
             "creationDate": u.created_at.isoformat() if u.created_at else None,
             "hasPublicKey": u.id in users_with_pk
@@ -146,7 +149,7 @@ async def get_admin_sos_alerts(db: AsyncSession = Depends(get_db)):
             "userId": a.user_id,
             "deviceId": a.device_id,
             "message": a.message or "EMERGENCY!",
-            "location": {"lat": a.latitude, "lon": a.longitude},
+            "location": {"lat": a.latitude, "lon": a.longitude} if a.latitude is not None and a.longitude is not None else None,
             "batteryLevel": a.battery_level if a.battery_level is not None else 100,
             "timestamp": a.created_at.isoformat() if a.created_at else None,
             "resolved": (a.status == "RESOLVED")

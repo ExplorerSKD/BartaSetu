@@ -16,6 +16,23 @@ async def register_device(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if device_data.id:
+        result = await db.execute(
+            select(Device).where(Device.id == device_data.id, Device.user_id == current_user.id)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.device_name = device_data.device_name
+            existing.fcm_token = device_data.fcm_token or existing.fcm_token
+            existing.platform = device_data.platform
+            if device_data.latitude is not None:
+                existing.latitude = device_data.latitude
+                existing.longitude = device_data.longitude
+            existing.last_seen = datetime.now(timezone.utc)
+            existing.is_online = True
+            await db.flush()
+            return DeviceResponse.model_validate(existing)
+
     device = Device(
         user_id=current_user.id,
         device_name=device_data.device_name,

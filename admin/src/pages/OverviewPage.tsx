@@ -14,7 +14,7 @@ const OverviewPage = () => {
       const msgs = await getMessages();
       setRecentMessages(msgs.slice(0, 5));
     };
-    fetchData();
+    fetchData().catch((err) => console.error("Failed to load overview", err));
   }, []);
 
   if (!stats) return <div className="p-4">Loading stats...</div>;

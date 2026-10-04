@@ -7,7 +7,7 @@ const SOSAlertsPage = () => {
   const [alerts, setAlerts] = useState<SOSAlertItem[]>([]);
 
   const fetchAlerts = () => {
-    getSOSAlerts().then(setAlerts);
+    getSOSAlerts().then(setAlerts).catch((err) => console.error("Failed to load SOS alerts", err));
   };
 
   useEffect(() => {
@@ -58,10 +58,16 @@ const SOSAlertsPage = () => {
                 </div>
                 <div className="flex items-center space-x-2 text-gray-700">
                   <MapPin size={18} className="text-gray-400"/>
-                  <span>Location: {alert.location.lat.toFixed(6)}, {alert.location.lon.toFixed(6)}</span>
-                  <a href={`https://www.google.com/maps/search/?api=1&query=${alert.location.lat},${alert.location.lon}`} target="_blank" rel="noreferrer" className="text-blue-600 text-sm hover:underline ml-2">
-                    Open Map
-                  </a>
+                  {alert.location ? (
+                    <>
+                      <span>Location: {alert.location.lat.toFixed(6)}, {alert.location.lon.toFixed(6)}</span>
+                      <a href={`https://www.google.com/maps/search/?api=1&query=${alert.location.lat},${alert.location.lon}`} target="_blank" rel="noreferrer" className="text-blue-600 text-sm hover:underline ml-2">
+                        Open Map
+                      </a>
+                    </>
+                  ) : (
+                    <span className="text-gray-500">Location: not available (no GPS fix on the phone)</span>
+                  )}
                 </div>
                 <div className="flex items-center space-x-2 text-gray-700">
                   <Battery size={18} className={alert.batteryLevel < 20 ? 'text-red-500' : 'text-green-500'}/>

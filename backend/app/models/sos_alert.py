@@ -11,8 +11,9 @@ class SOSAlert(Base):
     user_id = Column(CHAR(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     device_id = Column(CHAR(36), ForeignKey("devices.id", ondelete="CASCADE"), nullable=False)
     message = Column(Text, nullable=True)
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
+    # Nullable: an SOS without a GPS fix is still sent rather than given a made-up position
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     battery_level = Column(Integer, nullable=True)
     status = Column(String(20), default="ACTIVE", index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

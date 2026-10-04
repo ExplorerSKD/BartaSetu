@@ -1,5 +1,6 @@
 import asyncio
-from app.database import async_session
+from app.database import async_session, engine, Base
+import app.models
 from app.models.user import User
 from app.utils.security import hash_password
 from sqlalchemy import select
@@ -32,6 +33,8 @@ DUMMY_USERS = [
 ]
 
 async def seed():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     async with async_session() as db:
         for u in DUMMY_USERS:
             res = await db.execute(select(User).where(User.username == u["username"]))

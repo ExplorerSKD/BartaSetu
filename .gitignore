@@ -1,0 +1,140 @@
+# ==============================================================================
+# BartaSetu — Comprehensive .gitignore
+# Covers Python (FastAPI), React Native (Expo/Android), React (Vite), and OS
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Environment Variables & Secrets (NEVER COMMIT SENSITIVE DATA)
+# ------------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+firebase-credentials.json
+google-services.json
+
+# ------------------------------------------------------------------------------
+# Node.js & Web Bundles (mobile/ & admin/)
+# ------------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Production build artifacts
+dist/
+build/
+web-build/
+out/
+.vite/
+
+# ------------------------------------------------------------------------------
+# Expo & React Native (mobile/)
+# ------------------------------------------------------------------------------
+.expo/
+.expo-shared/
+.metro/
+metro-cache/
+
+# Android Native Build Outputs
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/android/build/
+mobile/android/local.properties
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+
+# iOS (if added in the future)
+mobile/ios/Pods/
+mobile/ios/build/
+*.xcworkspace
+!default.xcworkspace
+*.xcuserdatad
+
+# ------------------------------------------------------------------------------
+# Python & FastAPI Backend (backend/)
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# Distribution / Packaging
+.eggs/
+*.egg-info/
+*.egg
+develop-eggs/
+eggs/
+parts/
+bin/
+var/
+sdist/
+wheels/
+*.manifest
+*.spec
+
+# Database files & local caches
+*.db
+*.sqlite
+*.sqlite3
+mysql_data/
+
+# ------------------------------------------------------------------------------
+# IDEs & Code Editors
+# ------------------------------------------------------------------------------
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.sublime-workspace
+*.sublime-project
+*.swp
+*.swo
+*~
+
+# ------------------------------------------------------------------------------
+# Operating System Files
+# ------------------------------------------------------------------------------
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Logs
+logs/
+*.log

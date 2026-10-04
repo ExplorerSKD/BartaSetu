@@ -2,49 +2,35 @@ package com.bartasetu.ble
 
 import android.bluetooth.BluetoothDevice
 import android.content.Context
+import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
 
 class BleConnectionManager(private val context: Context) {
+    private val tag = "BartaSetu.BleConnectionManager"
     private val activeClients = ConcurrentHashMap<String, GattClient>()
-    private val retryCounts = ConcurrentHashMap<String, Int>()
 
-    fun connectDevice(device: BluetoothDevice) {
+    fun transmitMessage(
+        device: BluetoothDevice,
+        payloadBytes: ByteArray,
+        onComplete: (success: Boolean) -> Unit
+    ) {
         val address = device.address
-        if (activeClients.containsKey(address)) return
+        Log.i(tag, "Initiating transmission to peer: $address")
 
-        val client = GattClient(context, device) { disconnectedAddress ->
-            handleDisconnect(disconnectedAddress, device)
+        val client = GattClient(context, device) { success ->
+            activeClients.remove(address)
+            onComplete(success)
         }
+
         activeClients[address] = client
-        retryCounts[address] = 0
         client.connect()
-    }
-
-    private fun handleDisconnect(address: String, device: BluetoothDevice) {
-        activeClients.remove(address)
-        val currentRetries = retryCounts[address] ?: 0
-        if (currentRetries < BleConstants.MAX_RETRIES) {
-            retryCounts[address] = currentRetries + 1
-            // Optional delay before reconnect
-            connectDevice(device)
-        } else {
-            retryCounts.remove(address)
-        }
-    }
-
-    fun sendMessageToAll(message: String) {
-        activeClients.values.forEach { client ->
-            client.sendMessage(message)
-        }
-    }
-    
-    fun sendMessageToDevice(address: String, message: String) {
-        activeClients[address]?.sendMessage(message)
+        client.enqueuePayload(payloadBytes)
     }
 
     fun disconnectAll() {
-        activeClients.values.forEach { it.close() }
+        for ((_, client) in activeClients) {
+            client.cleanup()
+        }
         activeClients.clear()
-        retryCounts.clear()
     }
 }

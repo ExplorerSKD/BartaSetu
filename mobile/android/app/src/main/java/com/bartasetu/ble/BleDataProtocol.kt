@@ -1,100 +1,87 @@
 package com.bartasetu.ble
 
+import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.ceil
 
 object BleDataProtocol {
-    const val FLAG_START = 0x01.toByte()
-    const val FLAG_CONTINUATION = 0x02.toByte()
-    const val FLAG_END = 0x04.toByte()
-    const val FLAG_HANDSHAKE = 0x08.toByte()
-    const val FLAG_ID_EXCHANGE = 0x10.toByte()
+    const val FLAG_START: Byte = 0x01
+    const val FLAG_CONTINUATION: Byte = 0x02
+    const val FLAG_END: Byte = 0x04
+    const val FLAG_HANDSHAKE: Byte = 0x08
+    const val FLAG_ID_EXCHANGE: Byte = 0x10
 
-    private val assemblyBuffers = ConcurrentHashMap<String, AssemblyBuffer>()
+    private const val HEADER_SIZE = 5 // 1 byte flag + 2 bytes seq + 2 bytes total
 
-    class AssemblyBuffer(val expectedChunks: Short, val transferId: String, val timestamp: Long = System.currentTimeMillis()) {
-        val chunks = mutableMapOf<Short, ByteArray>()
-        
-        fun isComplete(): Boolean = chunks.size == expectedChunks.toInt()
-        
-        fun assemble(): ByteArray {
-            var totalSize = 0
-            for (i in 0 until expectedChunks) {
-                totalSize += chunks[i.toShort()]?.size ?: 0
-            }
-            val bb = ByteBuffer.allocate(totalSize)
-            for (i in 0 until expectedChunks) {
-                chunks[i.toShort()]?.let { bb.put(it) }
-            }
-            return bb.array()
-        }
-    }
+    private val assemblyBuffers = ConcurrentHashMap<String, ChunkAssembly>()
+
+    data class ChunkAssembly(
+        val totalChunks: Int,
+        val chunks: MutableMap<Int, ByteArray> = mutableMapOf(),
+        val createdAt: Long = System.currentTimeMillis()
+    )
 
     fun chunkPayload(data: ByteArray, mtu: Int): List<ByteArray> {
-        val headerSize = 5
-        val maxPayloadPerChunk = (mtu - 3) - headerSize
-        val numChunks = ceil(data.size.toDouble() / maxPayloadPerChunk).toInt().toShort()
-        val result = mutableListOf<ByteArray>()
+        val maxPayloadPerChunk = (mtu - 3) - HEADER_SIZE // 3 bytes GATT overhead
+        val effectivePayload = if (maxPayloadPerChunk > 10) maxPayloadPerChunk else 15
 
-        for (i in 0 until numChunks) {
-            val startIdx = i * maxPayloadPerChunk
-            val endIdx = Math.min(startIdx + maxPayloadPerChunk, data.size)
-            val chunkPayload = data.copyOfRange(startIdx, endIdx)
-            
+        val chunks = mutableListOf<ByteArray>()
+        val totalChunks = Math.ceil(data.size.toDouble() / effectivePayload).toInt()
+
+        for (i in 0 until totalChunks) {
+            val start = i * effectivePayload
+            val end = Math.min(start + effectivePayload, data.size)
+            val chunkLength = end - start
+
             val flag = when {
-                numChunks == 1.toShort() -> FLAG_START.toInt() or FLAG_END.toInt()
-                i == 0 -> FLAG_START.toInt()
-                i == numChunks.toInt() - 1 -> FLAG_END.toInt()
-                else -> FLAG_CONTINUATION.toInt()
+                totalChunks == 1 -> (FLAG_START.toInt() or FLAG_END.toInt()).toByte()
+                i == 0 -> FLAG_START
+                i == totalChunks - 1 -> FLAG_END
+                else -> FLAG_CONTINUATION
             }
-            
-            val bb = ByteBuffer.allocate(headerSize + chunkPayload.size)
-            bb.put(flag.toByte())
-            bb.putShort(i.toShort())
-            bb.putShort(numChunks)
-            bb.put(chunkPayload)
-            
-            result.add(bb.array())
+
+            val buffer = ByteBuffer.allocate(HEADER_SIZE + chunkLength)
+            buffer.put(flag)
+            buffer.putShort(i.toShort())
+            buffer.putShort(totalChunks.toShort())
+            buffer.put(data, start, chunkLength)
+
+            chunks.add(buffer.array())
         }
-        return result
+        return chunks
     }
 
     fun reassembleChunk(chunk: ByteArray, transferId: String): ByteArray? {
-        if (chunk.size < 5) return null
-        val bb = ByteBuffer.wrap(chunk)
-        val flag = bb.get()
-        val seq = bb.getShort()
-        val totalChunks = bb.getShort()
-        val payload = ByteArray(bb.remaining())
-        bb.get(payload)
+        if (chunk.size < HEADER_SIZE) return null
 
-        cleanupOldBuffers()
-        
-        var buffer = assemblyBuffers[transferId]
-        if (buffer == null) {
-            if ((flag.toInt() and FLAG_START.toInt()) == 0) return null 
-            buffer = AssemblyBuffer(totalChunks, transferId)
-            assemblyBuffers[transferId] = buffer
+        val buffer = ByteBuffer.wrap(chunk)
+        val flag = buffer.get()
+        val seq = buffer.short.toInt()
+        val total = buffer.short.toInt()
+
+        val payload = ByteArray(chunk.size - HEADER_SIZE)
+        buffer.get(payload)
+
+        val assembly = assemblyBuffers.computeIfAbsent(transferId) {
+            ChunkAssembly(totalChunks = total)
         }
 
-        buffer.chunks[seq] = payload
+        assembly.chunks[seq] = payload
 
-        if (buffer.isComplete()) {
+        if (assembly.chunks.size == assembly.totalChunks) {
             assemblyBuffers.remove(transferId)
-            return buffer.assemble()
-        }
-        return null
-    }
-
-    private fun cleanupOldBuffers() {
-        val now = System.currentTimeMillis()
-        val iterator = assemblyBuffers.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            if (now - entry.value.timestamp > 60_000) {
-                iterator.remove()
+            val output = ByteArrayOutputStream()
+            for (i in 0 until assembly.totalChunks) {
+                val piece = assembly.chunks[i] ?: return null
+                output.write(piece)
             }
+            return output.toByteArray()
         }
+
+        // Clean stale buffers older than 60 seconds
+        val now = System.currentTimeMillis()
+        assemblyBuffers.entries.removeIf { now - it.value.createdAt > 60_000 }
+
+        return null
     }
 }

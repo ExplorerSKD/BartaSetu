@@ -12,7 +12,7 @@ class BlePackage : ReactPackage {
         return listOf(BleModule(reactContext))
     }
 
-    override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<out View, out ReactShadowNode<*>>> {
+    override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<View, ReactShadowNode<*>>> {
         return emptyList()
     }
 }
